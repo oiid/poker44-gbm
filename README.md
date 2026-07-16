@@ -42,7 +42,3 @@ private data.
 
 The served model artifact is hash-pinned in `model_v3_meta.json`
 (`sha256_model_v3_joblib`); metrics on the temporal holdout are recorded there.
-
-## License
-
-MIT

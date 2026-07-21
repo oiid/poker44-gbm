@@ -1,745 +1,34 @@
 {
-  "model_name": "ens_v4_rank_blend_live_domain_adapted",
-  "pipeline": "train_v4.py (supersedes train_v3.py; same sanitization, live-sized groups, quantile domain map to newest capture, 1% zero-row guard; classifier stage = blend selected on simulated request-window reward with the exact serving remap)",
+  "model_name": "v5_rank_consensus_blend",
+  "base_pipeline": "train_v3 (sanitize, live-sized 80-100 groups, quantile domain map to newest capture, 1% zero-guard rows); rank members trained on per-date ~100-row rank groups",
+  "feature_module": "chunk_features_v3 (468 features)",
+  "n_features": 468,
   "winner": {
     "weights": {
       "stack": 0.3,
-      "rank_hgb": 0.7
+      "rank_hgb": 0.3,
+      "rs233": 0.4
     },
     "seeds": [
       42,
       43,
       44
     ],
-    "seed_averaged": true,
     "members": [
       "stack_s42",
       "stack_s43",
       "stack_s44",
       "rank_hgb_s42",
       "rank_hgb_s43",
-      "rank_hgb_s44"
+      "rank_hgb_s44",
+      "rs233_s42",
+      "rs233_s43",
+      "rs233_s44"
     ],
     "artifact_type": "VotingClassifier"
   },
-  "selection": {
-    "objective": "mean - 0.5*std of reward over 30 simulated 100-row request windows from the temporal holdout, serving remap applied (positive_fraction=0.15)",
-    "constraints": {
-      "live_std_min": 0.25,
-      "live_frac_ge_0.5": [
-        0.15,
-        0.85
-      ],
-      "zero_p_max": 0.1
-    },
-    "grid": "simplex 10% steps, <=4 of ['stack', 'mono', 'hgb700', 'pcamlp', 'et700', 'rank_hgb', 'rank_et'], simplicity margin 0.004",
-    "baseline_v3_hgb": {
-      "weights": {
-        "v3_hgb": 1.0
-      },
-      "pooled": {
-        "n": 304,
-        "n_bots": 152,
-        "ap": 0.83,
-        "recall_at_fpr5": 0.5592,
-        "hard_fpr_at_0.5": 0.2763,
-        "bots_ge_0.5": 0.6645,
-        "reward": 0.7495,
-        "reward_detail": {
-          "fpr": 0.0461,
-          "bot_recall": 0.5592,
-          "ap_score": 0.83,
-          "human_safety_penalty": 0.8041,
-          "calibration_quality": 0.8041,
-          "latency_quality": 1.0,
-          "base_score": 0.7495,
-          "reward": 0.7495,
-          "hard_bot_recall": 0.6645,
-          "hard_fpr": 0.2763,
-          "positive_prediction_rate": 0.4704,
-          "threshold_sanity_quality": 0.8041
-        }
-      },
-      "live": {
-        "min": 0.0046,
-        "mean": 0.5006,
-        "median": 0.521,
-        "max": 0.997,
-        "std": 0.3596,
-        "frac_ge_0.5": 0.51,
-        "hist_0.0_to_1.0_step_0.1": [
-          22,
-          13,
-          7,
-          2,
-          5,
-          7,
-          5,
-          7,
-          12,
-          20
-        ]
-      },
-      "p_zero": 0.0011,
-      "win_reward_mean": 0.8044,
-      "win_reward_std": 0.031,
-      "robust": 0.7889,
-      "constraints_ok": true
-    },
-    "named_candidates": {
-      "b_stack": {
-        "weights": {
-          "stack": 1.0
-        },
-        "pooled": {
-          "n": 304,
-          "n_bots": 152,
-          "ap": 0.8447,
-          "recall_at_fpr5": 0.5658,
-          "hard_fpr_at_0.5": 0.3224,
-          "bots_ge_0.5": 0.6908,
-          "reward": 0.7413,
-          "reward_detail": {
-            "fpr": 0.0329,
-            "bot_recall": 0.5658,
-            "ap_score": 0.8447,
-            "human_safety_penalty": 0.7529,
-            "calibration_quality": 0.7529,
-            "latency_quality": 1.0,
-            "base_score": 0.7413,
-            "reward": 0.7413,
-            "hard_bot_recall": 0.6908,
-            "hard_fpr": 0.3224,
-            "positive_prediction_rate": 0.5066,
-            "threshold_sanity_quality": 0.7529
-          }
-        },
-        "live": {
-          "min": 0.0434,
-          "mean": 0.5598,
-          "median": 0.5713,
-          "max": 0.9863,
-          "std": 0.3525,
-          "frac_ge_0.5": 0.56,
-          "hist_0.0_to_1.0_step_0.1": [
-            13,
-            10,
-            10,
-            7,
-            4,
-            7,
-            2,
-            4,
-            16,
-            27
-          ]
-        },
-        "p_zero": 0.0031,
-        "win_reward_mean": 0.8158,
-        "win_reward_std": 0.0277,
-        "robust": 0.8019,
-        "constraints_ok": true
-      },
-      "c_mono": {
-        "weights": {
-          "mono": 1.0
-        },
-        "pooled": {
-          "n": 304,
-          "n_bots": 152,
-          "ap": 0.8239,
-          "recall_at_fpr5": 0.5461,
-          "hard_fpr_at_0.5": 0.2829,
-          "bots_ge_0.5": 0.6513,
-          "reward": 0.7412,
-          "reward_detail": {
-            "fpr": 0.0395,
-            "bot_recall": 0.5461,
-            "ap_score": 0.8239,
-            "human_safety_penalty": 0.7968,
-            "calibration_quality": 0.7968,
-            "latency_quality": 1.0,
-            "base_score": 0.7412,
-            "reward": 0.7412,
-            "hard_bot_recall": 0.6513,
-            "hard_fpr": 0.2829,
-            "positive_prediction_rate": 0.4671,
-            "threshold_sanity_quality": 0.7968
-          }
-        },
-        "live": {
-          "min": 0.006,
-          "mean": 0.5048,
-          "median": 0.5331,
-          "max": 0.9969,
-          "std": 0.3562,
-          "frac_ge_0.5": 0.53,
-          "hist_0.0_to_1.0_step_0.1": [
-            20,
-            12,
-            8,
-            3,
-            4,
-            9,
-            3,
-            10,
-            12,
-            19
-          ]
-        },
-        "p_zero": 0.0015,
-        "win_reward_mean": 0.8,
-        "win_reward_std": 0.0298,
-        "robust": 0.7851,
-        "constraints_ok": true
-      },
-      "d_pcamlp": {
-        "weights": {
-          "pcamlp": 1.0
-        },
-        "pooled": {
-          "n": 304,
-          "n_bots": 152,
-          "ap": 0.826,
-          "recall_at_fpr5": 0.4737,
-          "hard_fpr_at_0.5": 0.3355,
-          "bots_ge_0.5": 0.7368,
-          "reward": 0.7027,
-          "reward_detail": {
-            "fpr": 0.0461,
-            "bot_recall": 0.4737,
-            "ap_score": 0.826,
-            "human_safety_penalty": 0.7383,
-            "calibration_quality": 0.7383,
-            "latency_quality": 1.0,
-            "base_score": 0.7027,
-            "reward": 0.7027,
-            "hard_bot_recall": 0.7368,
-            "hard_fpr": 0.3355,
-            "positive_prediction_rate": 0.5362,
-            "threshold_sanity_quality": 0.7383
-          }
-        },
-        "live": {
-          "min": 0.0,
-          "mean": 0.5044,
-          "median": 0.5347,
-          "max": 1.0,
-          "std": 0.4378,
-          "frac_ge_0.5": 0.5,
-          "hist_0.0_to_1.0_step_0.1": [
-            36,
-            4,
-            5,
-            4,
-            1,
-            1,
-            4,
-            4,
-            3,
-            38
-          ]
-        },
-        "p_zero": 0.0001,
-        "win_reward_mean": 0.7848,
-        "win_reward_std": 0.0313,
-        "robust": 0.7692,
-        "constraints_ok": true
-      },
-      "e1_bcd_353035": {
-        "weights": {
-          "stack": 0.35,
-          "mono": 0.3,
-          "pcamlp": 0.35
-        },
-        "pooled": {
-          "n": 304,
-          "n_bots": 152,
-          "ap": 0.8396,
-          "recall_at_fpr5": 0.5,
-          "hard_fpr_at_0.5": 0.3158,
-          "bots_ge_0.5": 0.6842,
-          "reward": 0.7219,
-          "reward_detail": {
-            "fpr": 0.0263,
-            "bot_recall": 0.5,
-            "ap_score": 0.8396,
-            "human_safety_penalty": 0.7602,
-            "calibration_quality": 0.7602,
-            "latency_quality": 1.0,
-            "base_score": 0.7219,
-            "reward": 0.7219,
-            "hard_bot_recall": 0.6842,
-            "hard_fpr": 0.3158,
-            "positive_prediction_rate": 0.5,
-            "threshold_sanity_quality": 0.7602
-          }
-        },
-        "live": {
-          "min": 0.0193,
-          "mean": 0.5239,
-          "median": 0.4958,
-          "max": 0.9923,
-          "std": 0.3214,
-          "frac_ge_0.5": 0.5,
-          "hist_0.0_to_1.0_step_0.1": [
-            14,
-            9,
-            5,
-            6,
-            16,
-            11,
-            5,
-            5,
-            7,
-            22
-          ]
-        },
-        "p_zero": 0.0016,
-        "win_reward_mean": 0.8024,
-        "win_reward_std": 0.0286,
-        "robust": 0.7881,
-        "constraints_ok": true
-      },
-      "e4_bc_5050": {
-        "weights": {
-          "stack": 0.5,
-          "mono": 0.5
-        },
-        "pooled": {
-          "n": 304,
-          "n_bots": 152,
-          "ap": 0.8346,
-          "recall_at_fpr5": 0.5789,
-          "hard_fpr_at_0.5": 0.3092,
-          "bots_ge_0.5": 0.6776,
-          "reward": 0.7461,
-          "reward_detail": {
-            "fpr": 0.0461,
-            "bot_recall": 0.5789,
-            "ap_score": 0.8346,
-            "human_safety_penalty": 0.7675,
-            "calibration_quality": 0.7675,
-            "latency_quality": 1.0,
-            "base_score": 0.7461,
-            "reward": 0.7461,
-            "hard_bot_recall": 0.6776,
-            "hard_fpr": 0.3092,
-            "positive_prediction_rate": 0.4934,
-            "threshold_sanity_quality": 0.7675
-          }
-        },
-        "live": {
-          "min": 0.0281,
-          "mean": 0.5323,
-          "median": 0.6009,
-          "max": 0.9915,
-          "std": 0.348,
-          "frac_ge_0.5": 0.54,
-          "hist_0.0_to_1.0_step_0.1": [
-            13,
-            16,
-            8,
-            5,
-            4,
-            4,
-            6,
-            9,
-            16,
-            19
-          ]
-        },
-        "p_zero": 0.0023,
-        "win_reward_mean": 0.8113,
-        "win_reward_std": 0.0277,
-        "robust": 0.7975,
-        "constraints_ok": true
-      },
-      "t2_trio_et_hgb": {
-        "weights": {
-          "et700": 0.45,
-          "hgb700": 0.55
-        },
-        "pooled": {
-          "n": 304,
-          "n_bots": 152,
-          "ap": 0.8353,
-          "recall_at_fpr5": 0.5329,
-          "hard_fpr_at_0.5": 0.2303,
-          "bots_ge_0.5": 0.6316,
-          "reward": 0.7588,
-          "reward_detail": {
-            "fpr": 0.0461,
-            "bot_recall": 0.5329,
-            "ap_score": 0.8353,
-            "human_safety_penalty": 0.8553,
-            "calibration_quality": 0.8553,
-            "latency_quality": 1.0,
-            "base_score": 0.7588,
-            "reward": 0.7588,
-            "hard_bot_recall": 0.6316,
-            "hard_fpr": 0.2303,
-            "positive_prediction_rate": 0.4309,
-            "threshold_sanity_quality": 0.8553
-          }
-        },
-        "live": {
-          "min": 0.1677,
-          "mean": 0.5089,
-          "median": 0.5605,
-          "max": 0.8353,
-          "std": 0.2341,
-          "frac_ge_0.5": 0.56,
-          "hist_0.0_to_1.0_step_0.1": [
-            0,
-            9,
-            24,
-            7,
-            4,
-            10,
-            13,
-            23,
-            10,
-            0
-          ]
-        },
-        "p_zero": 0.0003,
-        "win_reward_mean": 0.8044,
-        "win_reward_std": 0.0296,
-        "robust": 0.7896,
-        "constraints_ok": false
-      },
-      "r2_stack_rank": {
-        "weights": {
-          "stack": 0.6,
-          "rank_hgb": 0.2,
-          "rank_et": 0.2
-        },
-        "pooled": {
-          "n": 304,
-          "n_bots": 152,
-          "ap": 0.8384,
-          "recall_at_fpr5": 0.4737,
-          "hard_fpr_at_0.5": 0.3026,
-          "bots_ge_0.5": 0.6974,
-          "reward": 0.718,
-          "reward_detail": {
-            "fpr": 0.0395,
-            "bot_recall": 0.4737,
-            "ap_score": 0.8384,
-            "human_safety_penalty": 0.7749,
-            "calibration_quality": 0.7749,
-            "latency_quality": 1.0,
-            "base_score": 0.718,
-            "reward": 0.718,
-            "hard_bot_recall": 0.6974,
-            "hard_fpr": 0.3026,
-            "positive_prediction_rate": 0.5,
-            "threshold_sanity_quality": 0.7749
-          }
-        },
-        "live": {
-          "min": 0.0944,
-          "mean": 0.519,
-          "median": 0.5079,
-          "max": 0.9292,
-          "std": 0.2921,
-          "frac_ge_0.5": 0.51,
-          "hist_0.0_to_1.0_step_0.1": [
-            2,
-            20,
-            11,
-            8,
-            8,
-            5,
-            8,
-            10,
-            19,
-            9
-          ]
-        },
-        "p_zero": 0.002,
-        "win_reward_mean": 0.8283,
-        "win_reward_std": 0.0273,
-        "robust": 0.8146,
-        "constraints_ok": true
-      }
-    },
-    "winner_single_seed": {
-      "weights": {
-        "stack": 0.3,
-        "rank_hgb": 0.7
-      },
-      "pooled": {
-        "n": 304,
-        "n_bots": 152,
-        "ap": 0.8133,
-        "recall_at_fpr5": 0.4276,
-        "hard_fpr_at_0.5": 0.3224,
-        "bots_ge_0.5": 0.7171,
-        "reward": 0.6888,
-        "reward_detail": {
-          "fpr": 0.0461,
-          "bot_recall": 0.4276,
-          "ap_score": 0.8133,
-          "human_safety_penalty": 0.7529,
-          "calibration_quality": 0.7529,
-          "latency_quality": 1.0,
-          "base_score": 0.6888,
-          "reward": 0.6888,
-          "hard_bot_recall": 0.7171,
-          "hard_fpr": 0.3224,
-          "positive_prediction_rate": 0.5197,
-          "threshold_sanity_quality": 0.7529
-        }
-      },
-      "live": {
-        "min": 0.0167,
-        "mean": 0.4772,
-        "median": 0.403,
-        "max": 0.9954,
-        "std": 0.3478,
-        "frac_ge_0.5": 0.44,
-        "hist_0.0_to_1.0_step_0.1": [
-          16,
-          18,
-          8,
-          8,
-          6,
-          4,
-          3,
-          10,
-          8,
-          19
-        ]
-      },
-      "p_zero": 0.0012,
-      "win_reward_mean": 0.8324,
-      "win_reward_std": 0.0236,
-      "robust": 0.8206,
-      "constraints_ok": true
-    },
-    "winner_seed_avg": {
-      "weights": {
-        "stack": 0.3,
-        "rank_hgb": 0.7
-      },
-      "pooled": {
-        "n": 304,
-        "n_bots": 152,
-        "ap": 0.8229,
-        "recall_at_fpr5": 0.4079,
-        "hard_fpr_at_0.5": 0.3224,
-        "bots_ge_0.5": 0.7434,
-        "reward": 0.6863,
-        "reward_detail": {
-          "fpr": 0.0395,
-          "bot_recall": 0.4079,
-          "ap_score": 0.8229,
-          "human_safety_penalty": 0.7529,
-          "calibration_quality": 0.7529,
-          "latency_quality": 1.0,
-          "base_score": 0.6863,
-          "reward": 0.6863,
-          "hard_bot_recall": 0.7434,
-          "hard_fpr": 0.3224,
-          "positive_prediction_rate": 0.5329,
-          "threshold_sanity_quality": 0.7529
-        }
-      },
-      "live": {
-        "min": 0.0156,
-        "mean": 0.4937,
-        "median": 0.4,
-        "max": 0.9954,
-        "std": 0.35,
-        "frac_ge_0.5": 0.46,
-        "hist_0.0_to_1.0_step_0.1": [
-          16,
-          15,
-          10,
-          9,
-          4,
-          4,
-          2,
-          7,
-          14,
-          19
-        ]
-      },
-      "p_zero": 0.0011,
-      "win_reward_mean": 0.8343,
-      "win_reward_std": 0.0239,
-      "robust": 0.8224,
-      "constraints_ok": true
-    }
-  },
-  "adaptation": {
-    "live_sized_groups": {
-      "size_range": [
-        80,
-        100
-      ],
-      "groups_per_record_label": 8,
-      "n_groups": 3968,
-      "n_with_cross_record_borrow": 203,
-      "n_skipped": 0
-    },
-    "quantile_domain_map": {
-      "source": "pooled-label live-sized training rows (benchmark)",
-      "target": "100 live-capture chunks (capture_1784210187.json)",
-      "how": "per-feature monotone ECDF->live-quantile transfer baked into TRAINING features; artifact scores RAW live features",
-      "n_constant_source_features_collapsed": 5
-    },
-    "rank_branches": {
-      "members": [
-        "rank_hgb"
-      ],
-      "how": "Pipeline(FunctionTransformer(scipy.stats.rankdata, axis=0), clf): whole 100-chunk request batch is rank-transformed per feature at predict time; trained on per-date ~100-row rank groups; per-request recalibration that never goes stale"
-    },
-    "monotone_constraints": {
-      "n_constrained": 9,
-      "dates_checked": [
-        "2026-07-10",
-        "2026-07-11",
-        "2026-07-12",
-        "2026-07-13",
-        "2026-07-14",
-        "2026-07-15"
-      ],
-      "constrained_features": {
-        "vis_actions_per_hand_std": -1,
-        "hero_amt_bb_max": -1,
-        "hero_raise_to_bb_distinct_ratio": -1,
-        "pot_before_bb_q25": 1,
-        "pot_before_bb_n_distinct_per_hand": -1,
-        "pot_before_bb_distinct_ratio": -1,
-        "pot_after_bb_q25": 1,
-        "pot_after_bb_n_distinct_per_hand": -1,
-        "pot_after_bb_distinct_ratio": -1
-      }
-    },
-    "caveat": "domain map + live spread constraints calibrated to the newest capture; re-capture and retrain if the validator regime drifts (nightly cron does this)"
-  },
-  "zero_guard": {
-    "fraction": 0.01,
-    "p_bot_zero_vector_final_model": 0.001
-  },
-  "feature_names": [
-    "n_hands",
-    "hero_actions_per_hand",
-    "hero_actions_per_hand_mean",
-    "hero_actions_per_hand_std",
-    "vis_actions_per_hand_mean",
-    "vis_actions_per_hand_std",
-    "vis_actions_per_hand_min",
-    "vis_actions_per_hand_max",
-    "hero_share_fold",
-    "hero_share_check",
-    "hero_share_call",
-    "hero_share_bet",
-    "hero_share_raise",
-    "hero_aggression_freq",
-    "hero_aggr_to_passive",
-    "table_share_fold",
-    "table_share_check",
-    "table_share_call",
-    "table_share_bet",
-    "table_share_raise",
-    "hero_action_fraction_of_table",
-    "hero_preflop_action_share",
-    "hero_flop_action_share",
-    "hero_turn_action_share",
-    "hero_river_action_share",
-    "hero_preflop_aggr_freq",
-    "hero_flop_aggr_freq",
-    "hero_turn_aggr_freq",
-    "hero_river_aggr_freq",
-    "hero_preflop_fold_rate",
-    "hero_flop_fold_rate",
-    "hero_turn_fold_rate",
-    "hero_river_fold_rate",
-    "reach_preflop_rate",
-    "reach_flop_rate",
-    "reach_turn_rate",
-    "reach_river_rate",
-    "reach_turn_given_flop",
-    "reach_river_given_turn",
-    "hero_vpip_rate",
-    "hero_fold_preflop_only_rate",
-    "hero_per_hand_aggr_mean",
-    "hero_per_hand_aggr_std",
-    "hero_per_hand_amt_mean_std",
-    "hero_amt_bb_mean",
-    "hero_amt_bb_std",
-    "hero_amt_bb_cv",
-    "hero_amt_bb_min",
-    "hero_amt_bb_q25",
-    "hero_amt_bb_median",
-    "hero_amt_bb_q75",
-    "hero_amt_bb_max",
-    "hero_amt_bb_n_distinct_per_hand",
-    "hero_amt_bb_distinct_ratio",
-    "hero_raise_to_bb_mean",
-    "hero_raise_to_bb_std",
-    "hero_raise_to_bb_cv",
-    "hero_raise_to_bb_min",
-    "hero_raise_to_bb_q25",
-    "hero_raise_to_bb_median",
-    "hero_raise_to_bb_q75",
-    "hero_raise_to_bb_max",
-    "hero_raise_to_bb_n_distinct_per_hand",
-    "hero_raise_to_bb_distinct_ratio",
-    "hero_call_to_bb_mean",
-    "hero_call_to_bb_std",
-    "hero_call_to_bb_cv",
-    "hero_call_to_bb_min",
-    "hero_call_to_bb_q25",
-    "hero_call_to_bb_median",
-    "hero_call_to_bb_q75",
-    "hero_call_to_bb_max",
-    "hero_call_to_bb_n_distinct_per_hand",
-    "hero_call_to_bb_distinct_ratio",
-    "hero_bet_to_pot_mean",
-    "hero_bet_to_pot_std",
-    "hero_bet_to_pot_cv",
-    "hero_bet_to_pot_min",
-    "hero_bet_to_pot_q25",
-    "hero_bet_to_pot_median",
-    "hero_bet_to_pot_q75",
-    "hero_bet_to_pot_max",
-    "hero_bet_to_pot_n_distinct_per_hand",
-    "hero_bet_to_pot_distinct_ratio",
-    "pot_before_bb_mean",
-    "pot_before_bb_std",
-    "pot_before_bb_cv",
-    "pot_before_bb_min",
-    "pot_before_bb_q25",
-    "pot_before_bb_median",
-    "pot_before_bb_q75",
-    "pot_before_bb_max",
-    "pot_before_bb_n_distinct_per_hand",
-    "pot_before_bb_distinct_ratio",
-    "pot_after_bb_mean",
-    "pot_after_bb_std",
-    "pot_after_bb_cv",
-    "pot_after_bb_min",
-    "pot_after_bb_q25",
-    "pot_after_bb_median",
-    "pot_after_bb_q75",
-    "pot_after_bb_max",
-    "pot_after_bb_n_distinct_per_hand",
-    "pot_after_bb_distinct_ratio",
-    "pot_growth_mean",
-    "pot_growth_std",
-    "hero_stack_bb_mean",
-    "hero_stack_bb_std",
-    "n_players_mean",
-    "bb_mean",
-    "bb_n_distinct"
-  ],
-  "n_features": 111,
-  "n_sanitize_errors": 0,
+  "selection": "tournament_v5.py: 466 blends + SUMMA variants, salted 07-18+07-19 windows unseen by all candidates, staged serving remap, exact reward, consistency objective mean-0.5*std (details tournament_results.json)",
+  "capture_used_for_domain_map": "capture_1784608984.json",
   "training_dates": [
     "2026-06-14",
     "2026-06-15",
@@ -773,114 +62,126 @@
     "2026-07-13",
     "2026-07-14",
     "2026-07-15",
-    "2026-07-16"
+    "2026-07-16",
+    "2026-07-17",
+    "2026-07-18",
+    "2026-07-19",
+    "2026-07-20"
   ],
-  "n_examples": 3968,
-  "temporal_holdout_date": "2026-07-16",
-  "holdout_metrics": {
-    "v3_live_sized_80_100": {
-      "n": 304,
-      "n_bots": 152,
-      "ap": 0.8229,
-      "recall_at_fpr5": 0.4079,
-      "hard_fpr_at_0.5": 0.3224,
-      "bots_ge_0.5": 0.7434,
-      "reward": 0.8343,
-      "reward_detail": {
-        "fpr": 0.0395,
-        "bot_recall": 0.4079,
-        "ap_score": 0.8229,
-        "human_safety_penalty": 0.7529,
-        "calibration_quality": 0.7529,
-        "latency_quality": 1.0,
-        "base_score": 0.6863,
-        "reward": 0.6863,
-        "hard_bot_recall": 0.7434,
-        "hard_fpr": 0.3224,
-        "positive_prediction_rate": 0.5329,
-        "threshold_sanity_quality": 0.7529
+  "n_examples": 5184,
+  "poker44_positive_fraction": 0.1,
+  "unpickle_requires": [
+    "scikit-learn",
+    "scipy",
+    "numpy",
+    "joblib",
+    "lightgbm",
+    "xgboost",
+    "catboost"
+  ],
+  "p_bot_zero_vector": 0.0064,
+  "live_raw_scores": {
+    "min": 0.0611,
+    "mean": 0.5435,
+    "median": 0.5237,
+    "max": 0.994,
+    "std": 0.3208,
+    "frac_ge_0.5": 0.5083,
+    "hist_0.0_to_1.0_step_0.1": [
+      8,
+      19,
+      8,
+      10,
+      14,
+      8,
+      6,
+      11,
+      9,
+      27
+    ]
+  },
+  "tournament": {
+    "gate_dates": [
+      "2026-07-18",
+      "2026-07-19"
+    ],
+    "winner": {
+      "weights": {
+        "stack": 0.3,
+        "rank_hgb": 0.3,
+        "rs233": 0.4
       },
-      "reward_raw_probability": 0.6863,
-      "reward_definition": "mean window-sim remapped reward (v4)"
-    },
-    "v3_hgb_baseline_live_sized_80_100": {
-      "n": 304,
-      "n_bots": 152,
-      "ap": 0.83,
-      "recall_at_fpr5": 0.5592,
-      "hard_fpr_at_0.5": 0.2763,
-      "bots_ge_0.5": 0.6645,
-      "reward": 0.7495,
-      "reward_detail": {
-        "fpr": 0.0461,
-        "bot_recall": 0.5592,
-        "ap_score": 0.83,
-        "human_safety_penalty": 0.8041,
-        "calibration_quality": 0.8041,
-        "latency_quality": 1.0,
-        "base_score": 0.7495,
-        "reward": 0.7495,
-        "hard_bot_recall": 0.6645,
-        "hard_fpr": 0.2763,
-        "positive_prediction_rate": 0.4704,
-        "threshold_sanity_quality": 0.8041
+      "sel": {
+        "mean": 0.9122,
+        "std": 0.025,
+        "robust": 0.8997,
+        "p10": 0.8742,
+        "min": 0.8532,
+        "n_zero": 0
+      },
+      "conf": {
+        "mean": 0.9208,
+        "std": 0.0248,
+        "robust": 0.9084,
+        "p10": 0.8773,
+        "min": 0.8698,
+        "n_zero": 0
+      },
+      "all": {
+        "mean": 0.9157,
+        "std": 0.0252,
+        "robust": 0.903,
+        "p10": 0.8772,
+        "min": 0.8532,
+        "n_zero": 0
+      },
+      "p_zero": 0.0084,
+      "vs_staged": {
+        "wins": 69,
+        "ties": 0,
+        "losses": 31,
+        "mean_delta": 0.0104
       }
     },
-    "winner_window_sim": {
-      "reward_mean": 0.8343,
-      "reward_std": 0.0239,
-      "robust": 0.8224
-    },
-    "baseline_window_sim": {
-      "reward_mean": 0.8044,
-      "reward_std": 0.031,
-      "robust": 0.7889
+    "staged_baseline": {
+      "weights": {
+        "stack": 0.3,
+        "rank_hgb": 0.7
+      },
+      "sel": {
+        "mean": 0.9014,
+        "std": 0.0316,
+        "robust": 0.8856,
+        "p10": 0.8593,
+        "min": 0.8182,
+        "n_zero": 0
+      },
+      "conf": {
+        "mean": 0.9111,
+        "std": 0.0246,
+        "robust": 0.8988,
+        "p10": 0.8814,
+        "min": 0.864,
+        "n_zero": 0
+      },
+      "all": {
+        "mean": 0.9053,
+        "std": 0.0294,
+        "robust": 0.8906,
+        "p10": 0.8689,
+        "min": 0.8182,
+        "n_zero": 0
+      },
+      "p_zero": 0.002,
+      "vs_staged": {
+        "wins": 0,
+        "ties": 100,
+        "losses": 0,
+        "mean_delta": 0.0
+      }
     }
   },
-  "live_capture_check": {
-    "capture_file": "capture_1784210187.json",
-    "winner_holdout_fit": {
-      "min": 0.0156,
-      "mean": 0.4937,
-      "median": 0.4,
-      "max": 0.9954,
-      "std": 0.35,
-      "frac_ge_0.5": 0.46,
-      "hist_0.0_to_1.0_step_0.1": [
-        16,
-        15,
-        10,
-        9,
-        4,
-        4,
-        2,
-        7,
-        14,
-        19
-      ]
-    },
-    "final": {
-      "min": 0.0122,
-      "mean": 0.4943,
-      "median": 0.4133,
-      "max": 0.9944,
-      "std": 0.3436,
-      "frac_ge_0.5": 0.45,
-      "hist_0.0_to_1.0_step_0.1": [
-        18,
-        11,
-        9,
-        9,
-        8,
-        2,
-        5,
-        10,
-        6,
-        22
-      ]
-    }
-  },
-  "sha256_model_ens_joblib": "d8e4212a4a1a1b8d4d2102b2595a198eaace975a4f6937fb08485f5b1d6d33eb",
-  "sha256_chunk_features_py": "2bc072b43d03f1deb4b8bda1aeb1bf7d2569a2d22772a228f3d66c6b108f0a32",
-  "train_seconds": 380.5
+  "sha256_model_v4_joblib": "be4d75a8e7529c823d4f534e8ad01bc20c4fb3de2142f385b4229d5a8ffab709",
+  "sha256_chunk_features_v3_py": "ddce2766365e093b76049d8df98b93b44f10041357a9263fef55bae95953718e",
+  "train_seconds": 487.1
 }

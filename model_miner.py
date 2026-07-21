@@ -17,6 +17,11 @@ from typing import Tuple
 
 import bittensor as bt
 
+# Survive Finney runtime changes that break metagraph() on affected SDKs.
+# Dormant when the native call works; must run before Miner() is constructed.
+from poker44.utils import chain_patch
+chain_patch.apply()
+
 from poker44.base.miner import BaseMinerNeuron
 from poker44.utils.model_manifest import (
     build_local_model_manifest,
@@ -25,14 +30,20 @@ from poker44.utils.model_manifest import (
 )
 from poker44.validator.synapse import DetectionSynapse
 
+# v3 (2026-07-21 boundary): feature module is chunk_features_v3 — a strict
+# superset of chunk_features_v2 (its first 148 columns are bit-identical:
+# 111 deployed v1 + 37 cross-hand signature features), plus the coherent
+# block (per-hand behavioral scalar distributions + signature grid, pruned
+# on live captures).  chunk_features and chunk_features_v2 stay in the repo
+# untouched and are imported by chunk_features_v3.
 try:
-    from neurons import chunk_features as _chunk_features_module
-    from neurons.chunk_features import extract_features
+    from neurons import chunk_features_v3 as _chunk_features_module
+    from neurons.chunk_features_v3 import extract_features
     from neurons.miner import Miner as _HeuristicMiner
 except ImportError:  # running as a bare script without PYTHONPATH=repo root
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from neurons import chunk_features as _chunk_features_module
-    from neurons.chunk_features import extract_features
+    from neurons import chunk_features_v3 as _chunk_features_module
+    from neurons.chunk_features_v3 import extract_features
     from neurons.miner import Miner as _HeuristicMiner
 
 DEFAULT_MODEL_ARTIFACT = str(
@@ -115,14 +126,15 @@ class Miner(BaseMinerNeuron):
             ],
             defaults={
                 "model_name": "poker44-gbm",
-                "model_version": "1",
+                "model_version": "3",
                 "framework": "scikit-learn-histgradientboosting",
                 "license": "MIT",
                 "repo_url": "https://github.com/Poker44/Poker44-subnet",
                 "notes": (
-                    "HistGradientBoostingClassifier over stdlib chunk "
-                    "behavioral features (neurons/chunk_features.py); "
-                    "artifact metadata in model_artifacts/model_meta.json."
+                    "Gradient-boosting/ensemble classifier over stdlib chunk "
+                    "behavioral + cross-hand signature + coherent-block "
+                    "features (neurons/chunk_features_v3.py); artifact "
+                    "metadata in model_artifacts/model_meta.json."
                 ),
                 "open_source": True,
                 "inference_mode": "remote",
@@ -182,7 +194,7 @@ class Miner(BaseMinerNeuron):
         else:
             scores = [_HeuristicMiner.score_chunk(chunk) for chunk in chunks]
 
-        scores = self._remap_in_batch(scores)
+        scores = self._remap_in_batch(scores, chunks)
         synapse.risk_scores = scores
         synapse.predictions = [s >= 0.5 for s in scores]
         synapse.model_manifest = dict(self.model_manifest)
@@ -203,24 +215,61 @@ class Miner(BaseMinerNeuron):
     # Live batches mix humans and bots; the reward's rank metrics (AP,
     # recall@FPR) are invariant to this monotone remap, while the 0.5
     # threshold-sanity gate needs a low false-positive rate.
-    _POSITIVE_FRACTION = 0.15
+    #
+    # v2 (measured 2026-07-16, staging eval_remap.py, 200 labeled 100-chunk
+    # 50/50 batches from the 2026-07-16 holdout): reward is FLAT in the
+    # fraction over [0.05, 0.20] (threshold-sanity saturates at 1.0; rank
+    # metrics are remap-invariant), so 0.10 is chosen purely for tail margin:
+    # exact-k=floor(0.10*n) keeps worst-case hard-FPR at 10/(n_humans) and
+    # showed 0 gate breaches in 3000 simulated batches across 30/50/70% bot
+    # mixes.  The artifact may override via a `poker44_positive_fraction`
+    # attribute on the model object (artifact-only tuning, identity-safe).
+    _POSITIVE_FRACTION = 0.10
 
-    @classmethod
-    def _remap_in_batch(cls, scores: list) -> list:
+    def _positive_fraction(self) -> float:
+        frac = getattr(self.model, "poker44_positive_fraction", None)
+        try:
+            frac = float(frac)
+        except (TypeError, ValueError):
+            return self._POSITIVE_FRACTION
+        return frac if 0.0 < frac <= 0.5 else self._POSITIVE_FRACTION
+
+    @staticmethod
+    def _chunk_tie_key(chunk) -> str:
+        """Deterministic, batch-order-invariant tie-break for equal scores."""
+        import hashlib
+        import json
+
+        try:
+            blob = json.dumps(chunk, sort_keys=True, default=str)
+        except Exception:  # noqa: BLE001
+            blob = repr(chunk)
+        return hashlib.sha256(blob.encode()).hexdigest()
+
+    def _remap_in_batch(self, scores: list, chunks: list) -> list:
+        """Rank-preserving in-batch remap with an exact positive budget.
+
+        Exactly k = max(1, floor(fraction * n)) chunks land above 0.5;
+        positives are compressed into [0.501, 0.509], negatives spread over
+        [0.05, 0.49].  Ties are broken by a SHA-256 chunk fingerprint so a
+        permuted batch can never change which chunk crosses the threshold.
+        """
         n = len(scores)
         if n < 5:
             return scores
-        order = sorted(range(n), key=lambda i: (scores[i], i))
-        k = max(1, round(n * cls._POSITIVE_FRACTION))
+        keys = [self._chunk_tie_key(chunks[i]) if i < len(chunks) else str(i)
+                for i in range(n)]
+        order = sorted(range(n), key=lambda i: (scores[i], keys[i]))
+        k = max(1, int(n * self._positive_fraction()))
         remapped = [0.0] * n
         n_low = n - k
         for pos, idx in enumerate(order):
             if pos < n_low:
                 span = max(1, n_low - 1)
-                remapped[idx] = round(0.05 + 0.40 * (pos / span), 6)
+                remapped[idx] = round(0.05 + 0.44 * (pos / span), 6)
             else:
                 span = max(1, k - 1)
-                remapped[idx] = round(0.52 + 0.43 * ((pos - n_low) / span), 6)
+                remapped[idx] = round(0.501 + 0.008 * ((pos - n_low) / span), 6)
         return remapped
 
     _LIVE_CAPTURE_DIR = Path("/root/bittensor/poker44-data/live_capture")

@@ -605,6 +605,19 @@ def main():
 
     print("\nbuilding live-sized (80-100 hand) groups ...")
     X, y, dates, sizes, stats = build_live_sized_examples(records)
+    # POKER44_EXCLUDE_NEWEST=N drops the newest N dates from training
+    # entirely.  Used by the nightly honest gate: a "gate twin" trained
+    # without the newest 2 dates is compared on windows from those dates
+    # (gate_compare.py) — a model must never be gated on hands it trained
+    # on (hand-level memorization dominates; measured 2026-07-19).
+    exclude_n = int(os.environ.get("POKER44_EXCLUDE_NEWEST", "0"))
+    if exclude_n:
+        uniq_all = sorted(set(dates.tolist()))
+        drop = set(uniq_all[-exclude_n:])
+        keep = ~np.isin(dates, sorted(drop))
+        X, y, dates, sizes = X[keep], y[keep], dates[keep], sizes[keep]
+        print(f"EXCLUDED newest {exclude_n} dates {sorted(drop)} "
+              f"({int((~keep).sum())} rows) for honest gating")
     uniq = sorted(set(dates.tolist()))
     holdout_date = uniq[-1]
     tr = dates != holdout_date

@@ -106,7 +106,24 @@ class LegacyChunkScorer:
         """Rank-preserving in-batch remap with an exact positive budget.
 
         Verbatim behaviour from neurons/model_miner.py::_remap_in_batch.
+
+        MODE (env POKER44_REMAP_MODE, default "raw" since 2026-07-21):
+          * "raw"     -- return the model's own probabilities untouched.  The
+            production reward switched to 0.50*AP_skill + 0.30*recall@FPR5 +
+            0.20*BrierSkill, which has NO 0.5-threshold term and instead pays
+            for genuine calibration.  The exact-k band ([0.05,0.509], batch
+            mean ~0.29 against a ~50/50 prevalence) scores Brier WORSE than
+            the predict-prevalence baseline, so BrierSkill clips to 0 and the
+            whole 20% component is forfeited.  Measured on simulated windows:
+            raw beats exact-k by +0.033 reward at moderate ranking quality and
+            +0.034 at strong, and is never worse (BrierSkill is floored at 0).
+          * "exact_k" -- the legacy band, optimal under the OLD formula whose
+            threshold_sanity term required FPR@0.5 <= 0.10.
+        Ranking (AP, recall@FPR) is invariant to any monotone map, so this
+        switch only ever moves the calibration component.
         """
+        if os.getenv("POKER44_REMAP_MODE", "raw").strip().lower() == "raw":
+            return list(scores)
         n = len(scores)
         if n < 5:
             return scores

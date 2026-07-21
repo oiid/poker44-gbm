@@ -64,7 +64,16 @@ class LegacyChunkScorer:
             if candidate not in sys.path:
                 sys.path.append(candidate)
         try:
-            from neurons.chunk_features_v3 import FEATURE_NAMES, extract_features
+            # POKER44_FEATURES selects the feature bank so rollback is an env
+            # flip, not a re-edit.  "live" = the 260-feature live-robust
+            # n-gram bank (0% live-collapsed, selected under the live-proxy
+            # harness); "v3" = the legacy 468-feature bank (83% live-collapsed).
+            # The bank and the artifact are ONE UNIT — switching one without
+            # the other feeds the wrong width and scores garbage.
+            if os.getenv("POKER44_FEATURES", "v3").strip().lower() == "live":
+                from neurons.live_features import FEATURE_NAMES, extract_features
+            else:
+                from neurons.chunk_features_v3 import FEATURE_NAMES, extract_features
 
             self.extract_features = extract_features
             self.n_features = len(FEATURE_NAMES)

@@ -1,0 +1,197 @@
+{
+ "version": "live_ngram_v2_additive",
+ "built_from": {
+  "train_files": [
+   "raw_2026-06-14.json",
+   "raw_2026-06-15.json",
+   "raw_2026-06-16.json",
+   "raw_2026-06-17.json",
+   "raw_2026-06-18.json",
+   "raw_2026-06-19.json",
+   "raw_2026-06-20.json",
+   "raw_2026-06-21.json",
+   "raw_2026-06-22.json",
+   "raw_2026-06-23.json",
+   "raw_2026-06-24.json",
+   "raw_2026-06-25.json",
+   "raw_2026-06-26.json",
+   "raw_2026-06-27.json",
+   "raw_2026-06-28.json",
+   "raw_2026-06-29.json",
+   "raw_2026-06-30.json",
+   "raw_2026-07-01.json",
+   "raw_2026-07-02.json",
+   "raw_2026-07-03.json",
+   "raw_2026-07-04.json",
+   "raw_2026-07-05.json",
+   "raw_2026-07-06.json",
+   "raw_2026-07-07.json",
+   "raw_2026-07-08.json",
+   "raw_2026-07-09.json",
+   "raw_2026-07-10.json",
+   "raw_2026-07-11.json",
+   "raw_2026-07-12.json",
+   "raw_2026-07-13.json",
+   "raw_2026-07-14.json",
+   "raw_2026-07-15.json",
+   "raw_2026-07-16.json",
+   "raw_2026-07-17.json",
+   "raw_2026-07-18.json",
+   "raw_2026-07-19.json",
+   "raw_2026-07-20.json",
+   "raw_2026-07-21.json",
+   "raw_2026-07-22.json"
+  ],
+  "n_train_chunks": 2822,
+  "n_live_chunks": 300
+ },
+ "selection_rule": {
+  "min_doc_freq_train": 0.25,
+  "min_doc_freq_live": 0.25,
+  "require_nonzero_live_share_variance": true,
+  "rank_by": "training frequency",
+  "K_per_block": {
+   "SZ_1": 20,
+   "SZ_2": 40,
+   "SZ_3": 40,
+   "ZA_1": 12,
+   "ZA_2": 30
+  }
+ },
+ "tokenizers": {
+  "SZ": "street-initial + Family-A action code + ABSOLUTE pot-relative size bucket (0/s<0.40/m<0.90/p<1.50/o), i.e. the Cold poker44_ml/features.py::_hand_ngram_doc token",
+  "ZA": "Family-A action code + ABSOLUTE pot-relative size bucket, no street (direct A/B against the deployed AZ tercile block)"
+ },
+ "blocks": {
+  "SZ_1": {
+   "vocab": [
+    "pF0",
+    "fK0",
+    "tK0",
+    "fF0",
+    "fBm",
+    "pCs",
+    "rK0",
+    "tF0",
+    "tBm",
+    "pK0",
+    "rF0",
+    "fCs",
+    "tCs",
+    "tBs",
+    "fBs",
+    "rCs",
+    "rBs"
+   ]
+  },
+  "SZ_2": {
+   "vocab": [
+    "pF0>pF0",
+    "fK0>fK0",
+    "fK0>fBm",
+    "tK0>tK0",
+    "fBm>fF0",
+    "pF0>pCs",
+    "fK0>tK0",
+    "rK0>rK0",
+    "pCs>fK0",
+    "pF0>fK0",
+    "tK0>rK0",
+    "pK0>fK0",
+    "tBm>tF0",
+    "fF0>fF0",
+    "pCs>pK0",
+    "pF0>pK0",
+    "pF0>fBm",
+    "fCs>tK0",
+    "fK0>tBm",
+    "pCs>pF0",
+    "pCs>pCs",
+    "tCs>rK0",
+    "tF0>tF0",
+    "pK0>pCs",
+    "fF0>tK0"
+   ]
+  },
+  "SZ_3": {
+   "vocab": [
+    "pF0>pF0>pF0",
+    "fK0>fK0>tK0",
+    "pF0>pF0>pCs",
+    "tK0>rK0>rK0",
+    "pCs>fK0>fK0",
+    "pK0>fK0>fK0",
+    "pF0>pCs>pK0",
+    "pF0>pCs>fK0",
+    "pCs>pK0>fK0",
+    "pF0>pK0>fK0",
+    "pF0>fK0>fK0",
+    "pF0>pF0>fBm",
+    "pF0>pF0>fK0",
+    "pF0>pF0>pK0"
+   ]
+  },
+  "ZA_1": {
+   "vocab": [
+    "F0",
+    "K0",
+    "Bm",
+    "Cs",
+    "Rm",
+    "Bs"
+   ]
+  },
+  "ZA_2": {
+   "vocab": [
+    "F0>F0",
+    "K0>K0",
+    "K0>Bm",
+    "Bm>F0",
+    "Cs>K0",
+    "F0>K0",
+    "F0>Cs",
+    "Bm>Cs",
+    "F0>Bm",
+    "Cs>F0",
+    "K0>Bs",
+    "Rm>F0",
+    "Cs>Cs",
+    "Bs>Cs",
+    "Bs>F0",
+    "K0>Cs"
+   ]
+  }
+ },
+ "report": {
+  "SZ_1": {
+   "raw_candidates": 46,
+   "passed_filters": 17,
+   "kept": 17,
+   "K": 20
+  },
+  "SZ_2": {
+   "raw_candidates": 294,
+   "passed_filters": 25,
+   "kept": 25,
+   "K": 40
+  },
+  "SZ_3": {
+   "raw_candidates": 1080,
+   "passed_filters": 14,
+   "kept": 14,
+   "K": 40
+  },
+  "ZA_1": {
+   "raw_candidates": 13,
+   "passed_filters": 6,
+   "kept": 6,
+   "K": 12
+  },
+  "ZA_2": {
+   "raw_candidates": 101,
+   "passed_filters": 16,
+   "kept": 16,
+   "K": 30
+  }
+ }
+}

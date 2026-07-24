@@ -1,12 +1,13 @@
 """Capture v3.0 session payloads and distil the telemetry vocabulary.
 
-This is the highest-value thing the staged miner does on flip day.  The
-concrete telemetry ``event_type`` / ``target`` / ``value`` vocabulary is
-documented NOWHERE in the subnet repository -- the only example in the entire
-tree is the string ``"pointer_click"`` in one test fixture.  The first
-tournament window (Weekly Poker Championship, 2026-07-24 18:00 UTC) is the
-first and only place to observe it.  Whoever reverse-engineers that vocabulary
-first owns the format reset.
+Since 2026-07 the vocabulary IS documented (subject-session.v2:
+click/pointer_down/pointer_move/scroll/focus_in/visibility, target
+categories poker_action/navigation/control/other/null, value keys
+button/pointer/x_bucket/y_bucket/visible).  Capture remains valuable for a
+different reason now: it verifies real windows against the published enums
+(``telemetry_off_vocabulary`` flags drift), records the observed DISTRIBUTIONS
+(bucket ranges, pointer kinds, category mixes) that the schema does not pin
+down, and keeps raw payloads for training once labels can be joined.
 
 Two artefacts per request:
   * ``sessions_<window>_<ts>.json``  -- the full raw payload (rotated), which

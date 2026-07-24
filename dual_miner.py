@@ -64,8 +64,10 @@ from typing import Tuple
 import bittensor as bt
 
 _REPO = Path(__file__).resolve().parents[1]
-for _p in (str(_REPO), "/root/bittensor/Poker44-subnet",
-           "/root/bittensor/poker44-staging/v3"):
+# Repo code MUST win: appending staging (rather than inserting it at the front)
+# caused the deployed miner to import an unedited staging copy of
+# poker44_v3.chunk_legacy on 2026-07-21 and silently ignore a live fix.
+for _p in ("/root/bittensor/Poker44-subnet", str(_REPO)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
@@ -228,15 +230,17 @@ class DualProtocolMiner(BaseMinerNeuron):
     ) -> SessionDetectionSynapse:
         """One calibrated bot-risk score per session.  MUST NOT RAISE.
 
-        The reference implementation raises on an unsupported
-        ``protocol_version``, on a blank ``window_id`` and on any label-ish
-        key found anywhere in the payload.  All three are copied here as
-        WARNINGS only.  Rationale: the validator turns any exception into
-        reward 0.0, and refusing a request can never score better than
-        answering it.  The label check in particular is a live footgun --
-        telemetry ``value`` is unconstrained JSON, so a click event carrying a
-        button caption (``value={"label": "Raise to 200"}``) is a perfectly
-        legal payload that the reference miner would reject outright.
+        VERSIONING (origin/dev, 2026-07): the Bittensor transport keeps
+        ``protocol_version == "1"``; each session carries its own
+        ``schema_version`` -- ``"2"`` for tournament-sourced payloads,
+        ``"1"`` tolerated during migration (the reference boundary,
+        poker44/miner/service.py, accepts exactly {"1", "2"} and raises on
+        anything else).  We dispatch per session and NEVER raise: unknown
+        versions are scored anyway with the version-tolerant extractor,
+        because the validator turns any exception into reward 0.0 and
+        refusing a request can never score better than answering it.  Same
+        policy for a blank ``window_id`` and for label-ish keys buried in
+        the payload (stripped, logged, never read).
         """
         started = time.monotonic()
         self.session_requests += 1
@@ -260,6 +264,26 @@ class DualProtocolMiner(BaseMinerNeuron):
                      % (synapse.protocol_version,))
             if not str(synapse.window_id or "").strip():
                 _log("warning", "dual miner: blank window_id (answering anyway)")
+
+            # Per-session schema_version dispatch ("1" legacy, "2" tournament).
+            version_counts = {}
+            for s in sessions:
+                v = str(s.get("schema_version")) if isinstance(s, dict) else "?"
+                version_counts[v] = version_counts.get(v, 0) + 1
+            unknown = {v: c for v, c in version_counts.items()
+                       if v not in ("1", "2")}
+            if unknown:
+                _log("warning",
+                     "dual miner: sessions with unsupported schema_version %s "
+                     "(reference boundary accepts only {'1','2'}; scoring "
+                     "them anyway with the version-tolerant extractor)"
+                     % (unknown,))
+            if len(version_counts) > 1:
+                _log("warning", "dual miner: MIXED schema versions in one "
+                                "window: %s" % (version_counts,))
+            elif version_counts:
+                _log("info", "dual miner: session schema versions: %s"
+                     % (version_counts,))
 
             dropped = []
             clean = [_strip_forbidden(s, dropped, "sessions[%d]" % i)

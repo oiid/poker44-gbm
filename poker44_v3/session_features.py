@@ -1,22 +1,34 @@
-"""Native feature extraction for Poker44 v3.0 subject sessions.
+"""Native feature extraction for Poker44 v3.0 subject sessions (schema v1+v2).
 
 Stdlib only (matching neurons/chunk_features*.py), never raises, and
-vocabulary-agnostic: nothing here depends on knowing the concrete telemetry
-``event_type`` strings, which are NOT enumerated anywhere in the subnet repo
-(the only example in the whole tree is ``"pointer_click"``).  Every family
-degrades to zeros when its inputs are missing, which is what makes this safe
-to serve on day one of the format flip.
+version-tolerant: every family degrades to zeros when its inputs are
+missing, which is what makes this safe to serve across the migration.
 
-Design constraints taken from the contract
-(contracts/subject-session.v1.schema.json on origin/dev):
+Supports BOTH published payload contracts (dispatch is per-field, so a
+session that lies about its ``schema_version`` still extracts fine):
+  * subject-session.v1: telemetry events carry ``source`` ("client"/"server"),
+    a free-form ``target`` string and unconstrained ``value`` JSON; actions
+    carry ``occurred_at`` wall-clock timestamps.
+  * subject-session.v2 (origin/dev, 2026-07): ``source``/``target`` are GONE.
+    Events are {sequence, offset_ms, event_type, target_category, value} with
+      event_type      in {click, pointer_down, pointer_move, scroll,
+                          focus_in, visibility}
+      target_category in {poker_action, navigation, control, other, null}
+      value           a closed object over {button, pointer, x_bucket,
+                       y_bucket, visible} -- coordinates are BUCKETED ints.
+    Actions swap ``occurred_at`` for relative ``session_offset_ms``.
+    Example phases arrive UPPERCASE ("PREFLOP"), hence the lowercasing below.
+
+Other design constraints:
   * ``hands[].hand_number`` is NOT reliably present -- the JSON schema
     requires it but the miner-side validator only checks that ``hands`` is a
     non-empty list, and the repo's own fixtures omit it.  Always ``.get()``.
-  * telemetry ``events`` can be up to 50,000 per session and ``value`` is
-    completely unconstrained JSON.  Both are handled defensively and the
-    event scan is capped (``MAX_EVENTS_SCANNED``).
+  * telemetry ``events`` can be up to 50,000 per session.  Handled
+    defensively and the event scan is capped (``MAX_EVENTS_SCANNED``).
   * amounts are integers in unknown units.  Every size feature is a *ratio*,
-    never an absolute, so the extractor is scale-free.
+    never an absolute, so the extractor is scale-free.  Bucket units for
+    x_bucket/y_bucket are likewise undocumented, so bucket features are
+    entropies, ratios and step shapes, never absolute positions.
 
 Feature vector is fixed-length and ordered; ``FEATURE_NAMES`` is the schema.
 """
@@ -27,6 +39,13 @@ from collections import Counter
 ACTION_TYPES = ("fold", "check", "call", "bet", "raise", "all_in")
 PHASES = ("preflop", "flop", "turn", "river", "showdown")
 
+# The complete telemetry vocabulary of subject-session.v2 (normative:
+# contracts/subject-session.v2.schema.json on origin/dev).
+V2_EVENT_TYPES = ("click", "pointer_down", "pointer_move", "scroll",
+                  "focus_in", "visibility")
+V2_TARGET_CATEGORIES = ("poker_action", "navigation", "control", "other")
+V2_VALUE_KEYS = ("button", "pointer", "x_bucket", "y_bucket", "visible")
+
 # Hard cap on telemetry events examined per session.  A 256-session request at
 # the schema's 50k-event ceiling would be 12.8M dicts; a pure-python pass over
 # that busts even the 180s default timeout.  8k events is far more than enough
@@ -34,10 +53,11 @@ PHASES = ("preflop", "flop", "turn", "river", "showdown")
 MAX_EVENTS_SCANNED = 8000
 MAX_ACTIONS_SCANNED = 20000
 
-# Substring probes for the telemetry vocabulary we cannot yet observe.  These
-# are *hints*, not requirements: if none match, the corresponding features are
-# 0.0 and the day-one scorer gives them zero variance, hence zero influence.
-# After the first tournament window, replace these with the real vocabulary.
+# Substring probes kept for v1 payloads and for any future vocabulary drift.
+# Note they already light up on the REAL v2 vocabulary too:
+#   pointer_move -> POINTER; click/pointer_down -> CLICK;
+#   scroll/focus_in/visibility -> FOCUS.  KEY stays 0 (v2 exposes no key
+# events at all), which is itself correct behaviour, not a gap.
 POINTER_TOKENS = ("pointer", "mouse", "move", "hover", "cursor", "drag")
 CLICK_TOKENS = ("click", "tap", "press", "down", "up", "select")
 KEY_TOKENS = ("key", "type", "input", "paste")
@@ -267,8 +287,15 @@ def _strip_forbidden(value, dropped, path="session"):
     click event carrying a button caption (``value={"label": "Raise to 200"}``)
     is a perfectly legal payload.  Raising there means a zero score for the
     whole window.  We strip and log instead, and never read the values.
+
+    The v2 privacy boundary (docs/tournament-evaluation-workflow.md) forbids
+    more keys recursively; all of them are stripped here too.  ``source`` is
+    deliberately NOT stripped -- it is a legitimate, feature-bearing field of
+    v1 telemetry events and only the platform-internal raw-source is banned.
     """
-    forbidden = {"is_bot", "is_human", "ground_truth", "label", "bot_family"}
+    forbidden = {"is_bot", "is_human", "ground_truth", "label", "bot_family",
+                 "capture_source", "collector_version", "simulation",
+                 "session_index", "tournament_id", "user_id"}
     if isinstance(value, dict):
         out = {}
         for key, child in value.items():
@@ -284,6 +311,210 @@ def _strip_forbidden(value, dropped, path="session"):
             for i, child in enumerate(value)
         ]
     return value
+
+
+def _truthy(value):
+    """Best-effort boolean for the v2 ``visible`` value (bool/str/num forms)."""
+    if value is True:
+        return True
+    if value is False:
+        return False
+    if isinstance(value, str):
+        low = value.strip().lower()
+        if low in ("true", "visible", "1", "yes"):
+            return True
+        if low in ("false", "hidden", "0", "no"):
+            return False
+        return None
+    num = _num_or_none(value)
+    if num is None:
+        return None
+    return num != 0.0
+
+
+def _v2_event_features(events, n_actions, names, out):
+    """Exact-vocabulary features for subject-session.v2 telemetry.
+
+    Emits a FIXED block (unconditional adds) built on the documented v2
+    vocabulary: 6 event types, 4 target categories (+null) and the 5
+    allowlisted ``value`` keys.  On v1 payloads that do not use these names
+    everything here is 0.0 -> zero in-batch variance -> zero influence on the
+    rank ensemble.  Bucket units are undocumented, so geometry features are
+    entropies, ratios and step shapes, never absolute positions.
+    """
+    n = len(events)
+    type_counts = Counter()
+    cat_counts = Counter()
+    cat_key_seen = 0
+    null_cat = 0
+    pointer_kinds = Counter()
+    button_seen = 0
+    button_nonzero = 0
+    vis_true = 0
+    vis_false = 0
+    clicks = []
+    downs = []
+    moves = []
+    for e in events:
+        et = str(e.get("event_type") or "")
+        if et in V2_EVENT_TYPES:
+            type_counts[et] += 1
+        if "target_category" in e:
+            cat_key_seen += 1
+            cat = e.get("target_category")
+            if cat is None:
+                null_cat += 1
+            elif str(cat) in V2_TARGET_CATEGORIES:
+                cat_counts[str(cat)] += 1
+        val = e.get("value")
+        off = _num_or_none(e.get("offset_ms"))
+        if isinstance(val, dict):
+            p = val.get("pointer")
+            if p is not None:
+                pointer_kinds[str(p).strip().lower()] += 1
+            b = val.get("button")
+            if b is not None:
+                button_seen += 1
+                if _num_or_none(b) != 0.0:
+                    button_nonzero += 1
+            if "visible" in val:
+                flag = _truthy(val.get("visible"))
+                if flag is True:
+                    vis_true += 1
+                elif flag is False:
+                    vis_false += 1
+        if off is not None and off >= 0:
+            if et == "click":
+                clicks.append(off)
+            elif et == "pointer_down":
+                downs.append(off)
+            elif et == "pointer_move" and isinstance(val, dict):
+                x = _num_or_none(val.get("x_bucket"))
+                y = _num_or_none(val.get("y_bucket"))
+                if x is not None and y is not None:
+                    moves.append((off, x, y))
+
+    # -- vocabulary mix ----------------------------------------------------
+    for t in V2_EVENT_TYPES:
+        names.append("ev2_frac_" + t)
+        out.append(_safe_div(type_counts[t], n))
+    names.append("ev2_vocab_cover")
+    out.append(len(type_counts) / float(len(V2_EVENT_TYPES)))
+    for c in V2_TARGET_CATEGORIES:
+        names.append("ev2_cat_" + c + "_frac")
+        out.append(_safe_div(cat_counts[c], cat_key_seen))
+    names.append("ev2_cat_null_frac")
+    out.append(_safe_div(null_cat, cat_key_seen))
+
+    # -- value payloads ----------------------------------------------------
+    n_ptr = sum(pointer_kinds.values())
+    names.append("ev2_pointer_mouse_share")
+    out.append(_safe_div(pointer_kinds["mouse"], n_ptr))
+    names.append("ev2_pointer_touch_share")
+    out.append(_safe_div(pointer_kinds["touch"] + pointer_kinds["pen"], n_ptr))
+    names.append("ev2_button_present_frac")
+    out.append(_safe_div(button_seen, n))
+    names.append("ev2_button_nonzero_share")
+    out.append(_safe_div(button_nonzero, button_seen))
+    n_vis = vis_true + vis_false
+    names.append("ev2_visibility_events_per_action")
+    out.append(_safe_div(n_vis, n_actions))
+    names.append("ev2_visible_false_share")
+    out.append(_safe_div(vis_false, n_vis))
+
+    # -- click cadence -----------------------------------------------------
+    clicks.sort()
+    downs.sort()
+    click_gaps = [clicks[i + 1] - clicks[i] for i in range(len(clicks) - 1)]
+    names.append("ev2_click_n_log")
+    out.append(math.log1p(len(clicks)))
+    names.append("ev2_clicks_per_action")
+    out.append(_safe_div(len(clicks), n_actions))
+    names.append("ev2_clickgap_cv")
+    out.append(_safe_div(_std(click_gaps), _mean(click_gaps)))
+    names.append("ev2_clickgap_quantisation")
+    out.append(_quantisation_score(click_gaps))
+    names.append("ev2_clickgap_burstiness")
+    out.append(_burstiness(click_gaps))
+
+    # pointer_down -> click press durations (the physical button hold).
+    # Humans hold 60-200ms with spread; scripted clicks are 0 or a constant.
+    presses = []
+    di = 0
+    for c_off in clicks:
+        while di < len(downs) and downs[di] <= c_off:
+            di += 1
+        if di > 0 and c_off - downs[di - 1] <= 2000.0:
+            presses.append(c_off - downs[di - 1])
+    names.append("ev2_press_n_log")
+    out.append(math.log1p(len(presses)))
+    names.append("ev2_press_mean_log")
+    out.append(math.log1p(max(0.0, _mean(presses))))
+    names.append("ev2_press_cv")
+    out.append(_safe_div(_std(presses), _mean(presses)))
+    names.append("ev2_press_quantisation")
+    out.append(_quantisation_score(presses))
+
+    # -- pointer_move bucket geometry -------------------------------------
+    m = len(moves)
+    names.append("ev2_move_n_log")
+    out.append(math.log1p(m))
+    names.append("ev2_move_per_click")
+    out.append(_safe_div(m, max(1, len(clicks))))
+    names.append("ev2_moves_per_action")
+    out.append(_safe_div(m, n_actions))
+    cells = Counter((mv[1], mv[2]) for mv in moves)
+    names.append("ev2_cell_distinct_ratio")
+    out.append(_safe_div(len(cells), m))
+    names.append("ev2_cell_entropy")
+    out.append(_norm_entropy(cells))
+    xs = [mv[1] for mv in moves]
+    ys = [mv[2] for mv in moves]
+    names.append("ev2_xbucket_std")
+    out.append(_std(xs))
+    names.append("ev2_ybucket_std")
+    out.append(_std(ys))
+    steps = [abs(moves[i + 1][1] - moves[i][1]) + abs(moves[i + 1][2] - moves[i][2])
+             for i in range(m - 1)]
+    move_gaps = [moves[i + 1][0] - moves[i][0] for i in range(m - 1)
+                 if moves[i + 1][0] >= moves[i][0]]
+    names.append("ev2_step_mean")
+    out.append(_mean(steps))
+    names.append("ev2_step_cv")
+    out.append(_safe_div(_std(steps), _mean(steps)))
+    names.append("ev2_step_zero_share")
+    out.append(_safe_div(sum(1 for s in steps if s == 0), len(steps)))
+    path = sum(steps)
+    net = (abs(moves[-1][1] - moves[0][1]) + abs(moves[-1][2] - moves[0][2])
+           if m >= 2 else 0.0)
+    names.append("ev2_path_over_net")
+    out.append(_safe_div(path, net + 1.0))
+    rev = 0
+    for i in range(1, len(steps)):
+        dx0 = moves[i][1] - moves[i - 1][1]
+        dx1 = moves[i + 1][1] - moves[i][1]
+        if dx0 * dx1 < 0:
+            rev += 1
+    names.append("ev2_dir_reversal_rate")
+    out.append(_safe_div(rev, max(1, len(steps) - 1)))
+    names.append("ev2_movegap_cv")
+    out.append(_safe_div(_std(move_gaps), _mean(move_gaps)))
+    names.append("ev2_movegap_quantisation")
+    out.append(_quantisation_score(move_gaps))
+
+    # hover-before-click: time from the last pointer_move to each click.
+    hovers = []
+    mi = 0
+    move_offs = [mv[0] for mv in moves]
+    for c_off in clicks:
+        while mi < len(move_offs) and move_offs[mi] <= c_off:
+            mi += 1
+        if mi > 0 and c_off - move_offs[mi - 1] <= 5000.0:
+            hovers.append(c_off - move_offs[mi - 1])
+    names.append("ev2_hover_mean_log")
+    out.append(math.log1p(max(0.0, _mean(hovers))))
+    names.append("ev2_hover_cv")
+    out.append(_safe_div(_std(hovers), _mean(hovers)))
 
 
 # --------------------------------------------------------------------------
@@ -412,17 +643,26 @@ def _extract_inner(session, names, out, cheap):
         names.append(name)
         out.append(_f(value))
 
-    # ---- D: telemetry events (vocabulary agnostic) ---------------------
+    # ---- D: telemetry events (works on both v1 and v2) -----------------
+    # v1 events carry source/target; v2 events carry target_category and no
+    # source.  "interactive" = everything that is not explicitly server-side,
+    # so v2 events (sourceless by contract) all count -- the old client-only
+    # filter would have zeroed every offset-derived feature on v2 payloads.
     n_events = len(events)
     client = [e for e in events if str(e.get("source")) == "client"]
     server = [e for e in events if str(e.get("source")) == "server"]
+    interactive = [e for e in events if str(e.get("source", "")) != "server"]
     type_counter = Counter(str(e.get("event_type") or "") for e in events)
-    client_type_counter = Counter(str(e.get("event_type") or "") for e in client)
+    client_type_counter = Counter(
+        str(e.get("event_type") or "") for e in interactive)
     target_counter = Counter(
-        str(e.get("target")) for e in events if e.get("target") is not None
+        str(e.get("target") if e.get("target") is not None
+            else e.get("target_category"))
+        for e in events
+        if e.get("target") is not None or e.get("target_category") is not None
     )
     offsets = []
-    for e in client:
+    for e in interactive:
         v = _num_or_none(e.get("offset_ms"))
         if v is not None and v >= 0:
             offsets.append(v)
@@ -441,7 +681,7 @@ def _extract_inner(session, names, out, cheap):
 
     event_stats = [
         ("ev_n_log", math.log1p(n_events)),
-        ("ev_client_frac", _safe_div(len(client), n_events)),
+        ("ev_client_frac", _safe_div(len(interactive), n_events)),
         ("ev_server_frac", _safe_div(len(server), n_events)),
         ("ev_distinct_types_log", math.log1p(len(type_counter))),
         ("ev_type_entropy", _norm_entropy(type_counter)),
@@ -451,13 +691,15 @@ def _extract_inner(session, names, out, cheap):
         ("ev_distinct_targets_log", math.log1p(len(target_counter))),
         ("ev_target_entropy", _norm_entropy(target_counter)),
         ("ev_null_target_frac",
-         _safe_div(sum(1 for e in events if e.get("target") is None), n_events)),
+         _safe_div(sum(1 for e in events
+                       if e.get("target") is None
+                       and e.get("target_category") is None), n_events)),
         ("ev_targets_per_type", _safe_div(len(target_counter), max(1, len(type_counter)))),
         ("ev_value_present_frac", _safe_div(value_present, n_events)),
         ("ev_value_dict_frac", _safe_div(value_dict, n_events)),
         ("ev_value_numeric_frac", _safe_div(value_num, n_events)),
         ("ev_per_action", _safe_div(n_events, n_actions)),
-        ("ev_client_per_action", _safe_div(len(client), n_actions)),
+        ("ev_client_per_action", _safe_div(len(interactive), n_actions)),
         ("ev_server_per_action", _safe_div(len(server), n_actions)),
         ("ev_per_hand", _safe_div(n_events, n_hands)),
         ("ev_per_second", _safe_div(n_events, s_duration / 1000.0)),
@@ -476,9 +718,13 @@ def _extract_inner(session, names, out, cheap):
         out.append(_f(value))
     _dist_stats(ev_gaps, "evgap_", names, out)
 
+    # ---- D2: exact v2 vocabulary (zeros on v1 payloads) -----------------
+    _v2_event_features(events, n_actions, names, out)
+
     # ---- E: poker behaviour (survives the sanitisation) ----------------
-    a_types = [str(a.get("action_type") or "") for a in actions]
-    a_phases = [str(a.get("phase") or "") for a in actions]
+    # v2 example payloads carry UPPERCASE phases ("PREFLOP"); normalise.
+    a_types = [str(a.get("action_type") or "").strip().lower() for a in actions]
+    a_phases = [str(a.get("phase") or "").strip().lower() for a in actions]
     type_counts = Counter(a_types)
     phase_counts = Counter(a_phases)
     aggressive = type_counts["bet"] + type_counts["raise"] + type_counts["all_in"]
@@ -509,7 +755,8 @@ def _extract_inner(session, names, out, cheap):
         out.append(_safe_div(c["fold"], len(in_phase)))
         names.append("phase_reach_" + p)
         out.append(_safe_div(
-            sum(1 for h in per_hand if any(str(a.get("phase") or "") == p for a in h)),
+            sum(1 for h in per_hand
+                if any(str(a.get("phase") or "").strip().lower() == p for a in h)),
             n_hands))
 
     names.append("hands_n_log")
@@ -600,6 +847,19 @@ def _extract_inner(session, names, out, cheap):
     out.append(_safe_div(sum(1 for a in actions if a.get("community_cards")), n_actions))
     names.append("tab_occurred_at_frac")
     out.append(_safe_div(sum(1 for a in actions if a.get("occurred_at")), n_actions))
+    # v2 replaces occurred_at with relative session_offset_ms.
+    sess_offs = [v for v in (_num_or_none(a.get("session_offset_ms"))
+                             for a in actions) if v is not None and v >= 0]
+    names.append("tab_session_offset_frac")
+    out.append(_safe_div(len(sess_offs), n_actions))
+    names.append("tab_session_offset_monotone")
+    out.append(_safe_div(
+        sum(1 for i in range(len(sess_offs) - 1)
+            if sess_offs[i + 1] >= sess_offs[i]),
+        max(1, len(sess_offs) - 1)))
+    names.append("tab_session_offset_span_vs_duration")
+    out.append(_safe_div(sess_offs[-1] - sess_offs[0] if len(sess_offs) > 1 else 0.0,
+                         s_duration))
     a_seqs = [v for v in (_num_or_none(a.get("sequence")) for a in actions) if v is not None]
     names.append("tab_action_seq_monotone")
     out.append(_safe_div(
@@ -624,14 +884,18 @@ N_FEATURES = len(FEATURE_NAMES)
 def telemetry_vocabulary(sessions):
     """Distil the observed telemetry vocabulary from a batch of sessions.
 
-    This is the intel product of the format reset: the concrete
-    ``event_type`` / ``target`` / ``value``-shape vocabulary is documented
-    NOWHERE in the subnet repo, so the first tournament window is the only
-    place to learn it.  Called on every request by the capture hook.
+    v2 documents its vocabulary (see ``V2_EVENT_TYPES`` etc.), so for v2
+    payloads this now verifies conformance and captures anything OUTSIDE the
+    documented enums (schema drift is exactly what we want to catch first).
+    v1 payloads are still distilled in full.  Called per request by capture.
     """
     ev_types = Counter()
     ev_targets = Counter()
+    ev_categories = Counter()
     ev_sources = Counter()
+    schema_versions = Counter()
+    off_vocab = Counter()
+    value_keys = Counter()
     value_shapes = Counter()
     value_samples = {}
     act_event_types = Counter()
@@ -640,6 +904,7 @@ def telemetry_vocabulary(sessions):
     for session in sessions if isinstance(sessions, list) else []:
         if not isinstance(session, dict):
             continue
+        schema_versions[str(session.get("schema_version"))] += 1
         telemetry = session.get("telemetry")
         if isinstance(telemetry, dict):
             events = telemetry.get("events")
@@ -649,10 +914,23 @@ def telemetry_vocabulary(sessions):
                         continue
                     et = str(ev.get("event_type") or "")
                     ev_types[et] += 1
-                    ev_sources[str(ev.get("source"))] += 1
+                    if et and et not in V2_EVENT_TYPES:
+                        off_vocab["event_type:" + et] += 1
+                    if "source" in ev:
+                        ev_sources[str(ev.get("source"))] += 1
                     if ev.get("target") is not None:
                         ev_targets[str(ev.get("target"))] += 1
+                    if "target_category" in ev:
+                        cat = ev.get("target_category")
+                        ev_categories[str(cat)] += 1
+                        if cat is not None and str(cat) not in V2_TARGET_CATEGORIES:
+                            off_vocab["target_category:" + str(cat)] += 1
                     val = ev.get("value")
+                    if isinstance(val, dict):
+                        for k in val:
+                            value_keys[str(k)] += 1
+                            if str(k) not in V2_VALUE_KEYS:
+                                off_vocab["value_key:" + str(k)] += 1
                     shape = type(val).__name__
                     if isinstance(val, dict):
                         shape = "dict{" + ",".join(sorted(str(k) for k in val)[:8]) + "}"
@@ -677,11 +955,15 @@ def telemetry_vocabulary(sessions):
                         positions[str(a.get("position_name"))] += 1
                         phases[str(a.get("phase"))] += 1
     return {
+        "schema_versions": schema_versions.most_common(),
         "telemetry_event_types": ev_types.most_common(200),
         "telemetry_targets": ev_targets.most_common(200),
+        "telemetry_target_categories": ev_categories.most_common(50),
         "telemetry_sources": ev_sources.most_common(),
+        "telemetry_value_keys": value_keys.most_common(50),
         "telemetry_value_shapes": value_shapes.most_common(200),
         "telemetry_value_samples": value_samples,
+        "telemetry_off_vocabulary": off_vocab.most_common(100),
         "hand_action_event_types": act_event_types.most_common(100),
         "position_names": positions.most_common(50),
         "phases": phases.most_common(20),

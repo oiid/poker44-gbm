@@ -108,12 +108,33 @@ SIGNALS = (
     ("sig_act_mean_run_len", +1.0, 0.30),
     ("act_aggression_freq", +1.0, 0.20),    # weak prior, kept small
 
-    # --- vocabulary probes: 0.0 (=> no variance => no effect) until the
-    #     real telemetry event names are observed on 2026-07-24, then these
-    #     become high-value with a one-line weight bump.
+    # --- vocabulary probes (v1 fallback; on v2 these also fire because the
+    #     real names contain the probe tokens: pointer_move, click, ...) -----
     ("ev_pointer_share", -1.0, 0.50),
     ("ev_key_share", -1.0, 0.40),
     ("ev_focus_share", -1.0, 0.40),
+
+    # --- EXACT subject-session.v2 vocabulary (schema-published 2026-07).
+    #     Zero variance on v1 batches => zero influence there. -------------
+    ("ev2_frac_pointer_move", -1.0, 0.80),   # agents under-produce motion
+    ("ev2_move_per_click", -1.0, 0.80),
+    ("ev2_moves_per_action", -1.0, 0.70),
+    ("ev2_cell_distinct_ratio", -1.0, 0.60),  # humans wander across buckets
+    ("ev2_cell_entropy", -1.0, 0.60),
+    ("ev2_step_zero_share", +1.0, 0.50),      # sub-bucket/no-op "moves"
+    ("ev2_path_over_net", -1.0, 0.50),        # humans overshoot and correct
+    ("ev2_dir_reversal_rate", -1.0, 0.40),
+    ("ev2_movegap_cv", -1.0, 0.50),           # metronomic mover cadence
+    ("ev2_movegap_quantisation", +1.0, 0.50),
+    ("ev2_clickgap_cv", -1.0, 0.60),
+    ("ev2_clickgap_quantisation", +1.0, 0.60),
+    ("ev2_press_cv", -1.0, 0.60),             # button-hold spread is human
+    ("ev2_press_quantisation", +1.0, 0.40),
+    ("ev2_hover_cv", -1.0, 0.50),             # aim-settle time varies
+    ("ev2_frac_scroll", -1.0, 0.30),
+    ("ev2_frac_visibility", -1.0, 0.40),      # humans tab away mid-session
+    ("ev2_visible_false_share", -1.0, 0.30),
+    ("ev2_button_nonzero_share", -1.0, 0.20),  # occasional right-click
 )
 
 MIN_BATCH_FOR_RANKS = 4

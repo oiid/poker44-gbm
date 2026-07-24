@@ -1,22 +1,31 @@
 """Telemetry feature bank for Poker44 v3.0 subject sessions (STAGING).
 
-Target payload: ``contracts/subject-session.v1.schema.json`` on
-``origin/dev`` of Poker44-subnet, i.e. the v3.0 "subject session" that
-replaces the old chunk format:
+Target payloads: ``contracts/subject-session.v1.schema.json`` AND
+``contracts/subject-session.v2.schema.json`` on ``origin/dev`` (the v2
+contract is the one tournament windows actually ship since 2026-07):
 
-    {
-      "schema_version": "1",
-      "session_id": str, "window_id": str,
-      "hands": [ {"hand_number": int, "actions": [ {...} ]} ],      # 1..512
-      "telemetry": {
-        "events": [ {"sequence": int, "offset_ms": int,
-                     "source": "client"|"server",
-                     "event_type": str, "target": str|None,
-                     "value": <any JSON>} ],                        # <=50000
-        "summary": {"event_count","action_count","duration_ms",
-                    "decision_count","decision_mean_ms","decision_std_ms"}
-      }
-    }
+    v1 events: {"sequence": int, "offset_ms": int,
+                "source": "client"|"server",
+                "event_type": str, "target": str|None, "value": <any JSON>}
+    v2 events: {"sequence": int, "offset_ms": int,
+                "event_type": "click"|"pointer_down"|"pointer_move"|
+                              "scroll"|"focus_in"|"visibility",
+                "target_category": "poker_action"|"navigation"|"control"|
+                                   "other"|None,
+                "value": {button?, pointer?, x_bucket?, y_bucket?, visible?}}
+
+    v2 actions swap v1's wall-clock ``occurred_at`` for a relative
+    ``session_offset_ms``; ``source``/raw ``target`` and raw pixel
+    coordinates are gone -- coordinates arrive as bucketed ints.
+
+The version dispatch lives in ``_Ctx`` (per-field, defensive): v2
+``target_category`` backfills the target channel, ``x_bucket``/``y_bucket``
+feed the g07 motor geometry through the same coordinate walker, clicks are
+exact ``event_type == "click"`` matches on v2, and ``value`` payloads emit
+attention hints (mouse/touch, button, visible/hidden) consumed by g08.
+Group g11_v2vocab adds exact-vocabulary features (type/category mixes,
+press durations, session_offset structure) on top; on v1 payloads it reads
+as zeros.
 
 The v3 payload deleted almost everything the old 468-feature chunk
 extractor fed on (metadata, players roster, streets/board, outcome /
@@ -61,6 +70,8 @@ Feature groups (hypotheses documented in README_telemetry_features.md):
   g08_attention    focus/blur, idle gaps, burstiness, fatigue drift
   g09_sequence     n-gram entropy / compressibility / repeated lines
   g10_drift        cross-hand stationarity (humans drift, bots do not)
+  g11_v2vocab      exact subject-session.v2 vocabulary (types, categories,
+                   value keys, press durations, session_offset structure)
 """
 
 from __future__ import annotations
@@ -693,6 +704,7 @@ def _reg_block(out: _Out, prefix: str, values) -> None:
 
 _COORD_KEYS = (
     ("x", "y"),
+    ("x_bucket", "y_bucket"),   # subject-session.v2 bucketed coordinates
     ("clientx", "clienty"),
     ("pagex", "pagey"),
     ("offsetx", "offsety"),
@@ -702,6 +714,12 @@ _COORD_KEYS = (
     ("left", "top"),
     ("col", "row"),
 )
+
+# The complete, closed telemetry vocabulary of subject-session.v2.
+_V2_EVENT_TYPES = ("click", "pointer_down", "pointer_move", "scroll",
+                   "focus_in", "visibility")
+_V2_TARGET_CATEGORIES = ("poker_action", "navigation", "control", "other")
+_V2_VALUE_KEYS = ("button", "pointer", "x_bucket", "y_bucket", "visible")
 _COORD_CONTAINERS = ("position", "pos", "point", "coords", "coordinate", "coordinates", "xy", "at")
 
 _CLICKY = ("click", "tap", "press", "down", "up", "select", "button", "submit")
@@ -716,7 +734,10 @@ _ATTENTION_FAMILIES: dict[str, tuple[str, ...]] = {
     "key": ("key", "type", "input", "text", "paste", "copy"),
     "scroll": ("scroll", "wheel", "zoom", "resize"),
     "nav": ("nav", "route", "page", "load", "open", "close", "enter", "leave", "join"),
-    "bet_ui": ("slider", "bet", "raise", "amount", "chip", "stack", "pot"),
+    # "poker_action" is the v2 target_category for the action controls, i.e.
+    # exactly the bet-UI surface this family fingerprints.
+    "bet_ui": ("slider", "bet", "raise", "amount", "chip", "stack", "pot",
+               "poker_action"),
     "chat": ("chat", "message", "emote", "note", "avatar"),
 }
 _ATTENTION_KEYS = tuple(_ATTENTION_FAMILIES.keys())
@@ -774,12 +795,62 @@ def _street_index(phase: Any) -> float:
     return -1.0
 
 
+def _tgt(event: dict) -> Any:
+    """Merged target channel: v1 ``target`` else v2 ``target_category``."""
+    t = event.get("target")
+    if t is not None:
+        return t
+    return event.get("target_category")
+
+
+def _visible_flag(value: Any):
+    """Coerce the v2 ``visible`` value to True/False/None."""
+    if value is True:
+        return True
+    if value is False:
+        return False
+    if isinstance(value, str):
+        low = value.strip().lower()
+        if low in ("true", "visible", "1", "yes"):
+            return True
+        if low in ("false", "hidden", "0", "no"):
+            return False
+        return None
+    num = _num(value)
+    if num is None:
+        return None
+    return num != 0.0
+
+
+def _value_hint(value: Any) -> str:
+    """Compact string of the v2 value payload for token matching (g08)."""
+    if not isinstance(value, dict):
+        return ""
+    parts = []
+    pointer = value.get("pointer")
+    if pointer is not None:
+        parts.append(str(pointer).strip().lower())
+    button = value.get("button")
+    if button is not None:
+        parts.append("button%s" % button)
+    if "visible" in value:
+        flag = _visible_flag(value.get("visible"))
+        if flag is True:
+            parts.append("visible")
+        elif flag is False:
+            parts.append("hidden")
+    return "|".join(parts)
+
+
 class _Ctx:
     """Normalised, defensive view of one subject session."""
 
     def __init__(self, session: Any) -> None:
         self.ok = isinstance(session, dict)
         session = session if self.ok else {}
+        # v2 dispatch: trust the declared version, but every consumer below
+        # still degrades per-field so a mislabelled session cannot crash us.
+        self.is_v2 = str(session.get("schema_version") or "") == "2"
 
         tel = session.get("telemetry")
         self.has_tel = isinstance(tel, dict)
@@ -799,10 +870,21 @@ class _Ctx:
 
         self.ev_off = np.array([_num(e.get("offset_ms"), 0.0) or 0.0 for e in events], dtype=float)
         self.ev_type = [str(e.get("event_type") or "").strip().lower() for e in events]
-        self.ev_target = [("" if e.get("target") is None else str(e.get("target")).strip().lower()) for e in events]
+        # target channel: v1 raw ``target``, backfilled by v2 ``target_category``
+        # (poker_action / navigation / control / other).  Every target-driven
+        # feature (click targets, entropies, attention families) then works on
+        # both contracts without further branching.
+        self.ev_target = [
+            ("" if _tgt(e) is None else str(_tgt(e)).strip().lower())
+            for e in events
+        ]
         self.ev_source = [str(e.get("source") or "").strip().lower() for e in events]
-        self.ev_has_target = np.array([e.get("target") not in (None, "") for e in events], dtype=bool)
+        self.ev_has_target = np.array(
+            [_tgt(e) not in (None, "") for e in events], dtype=bool)
         self.ev_has_value = np.array([e.get("value") is not None for e in events], dtype=bool)
+        # v2 value hints for the attention blob: pointer kind (mouse/touch/
+        # pen), pressed button, page visible/hidden transitions.
+        self.ev_hint = [_value_hint(e.get("value")) for e in events]
         self.ev_dt = np.diff(self.ev_off) if self.n_events >= 2 else np.zeros(0, dtype=float)
         self.ev_dt = self.ev_dt[self.ev_dt >= 0]
 
@@ -890,13 +972,19 @@ class _Ctx:
         self.duration_ms = max(float(dur), 0.0)
         self.minutes = max(self.duration_ms / 60000.0, _EPS)
 
-        # pointer / motor stream
+        # pointer / motor stream.  v2 has an exact click event; treating
+        # pointer_down as a click there would double-count every physical
+        # press (down+click pairs), so clicks are exact matches on v2 and
+        # token matches on v1/unknown vocabularies.
         self.points: list[tuple[float, float]] = []
         self.point_dt: list[float] = []
         self.click_idx: list[int] = []
         for i, ev in enumerate(self.events):
             et = self.ev_type[i]
-            if any(tok in et for tok in _CLICKY):
+            if self.is_v2:
+                if et == "click":
+                    self.click_idx.append(i)
+            elif any(tok in et for tok in _CLICKY):
                 self.click_idx.append(i)
             pt = _walk_for_point(ev.get("value"))
             if pt is not None:
@@ -1417,8 +1505,8 @@ def _g07_motor(ctx: _Ctx, out: _Out) -> None:
 def _g08_attention(ctx: _Ctx, out: _Out) -> None:
     n_ev = max(ctx.n_events, 1)
     fam_counts = {k: 0 for k in _ATTENTION_KEYS}
-    for et, tg in zip(ctx.ev_type, ctx.ev_target):
-        blob = et + "|" + tg
+    for et, tg, hint in zip(ctx.ev_type, ctx.ev_target, ctx.ev_hint):
+        blob = et + "|" + tg + "|" + hint
         for fam, toks in _ATTENTION_FAMILIES.items():
             if any(tok in blob for tok in toks):
                 fam_counts[fam] += 1
@@ -1651,6 +1739,145 @@ def _ks_halves(a: np.ndarray) -> float:
 
 
 # ---------------------------------------------------------------------------
+# g11 exact subject-session.v2 vocabulary
+# ---------------------------------------------------------------------------
+
+
+def _g11_v2vocab(ctx: _Ctx, out: _Out) -> None:
+    """Features over the CLOSED v2 vocabulary; zeros on v1 payloads.
+
+    Everything here is exact-match against the published enums (6 event
+    types, 4 target categories + null, 5 value keys), so unlike the token
+    probes elsewhere it cannot alias onto unknown vocabularies.
+    """
+    n_ev = max(ctx.n_events, 1)
+    tc = Counter(ctx.ev_type)
+    for t in _V2_EVENT_TYPES:
+        out.add(f"share_{t}", tc.get(t, 0) / n_ev)
+    covered = sum(1 for t in _V2_EVENT_TYPES if tc.get(t, 0) > 0)
+    out.add("vocab_cover", covered / float(len(_V2_EVENT_TYPES)))
+    out.add("off_vocab_share",
+            sum(c for t, c in tc.items() if t and t not in _V2_EVENT_TYPES) / n_ev)
+
+    # target categories (read from the raw events; ev_target is the merged
+    # channel and would count v1 raw targets as "other" misses)
+    cat_counts: Counter = Counter()
+    cat_seen = 0
+    for ev in ctx.events:
+        if "target_category" in ev:
+            cat_seen += 1
+            cat = ev.get("target_category")
+            cat_counts["null" if cat is None else str(cat).strip().lower()] += 1
+    denom = max(cat_seen, 1)
+    for cat in _V2_TARGET_CATEGORIES:
+        out.add(f"cat_{cat}_share", cat_counts.get(cat, 0) / denom)
+    out.add("cat_null_share", cat_counts.get("null", 0) / denom)
+    out.add("cat_present", 1.0 if cat_seen else 0.0)
+    out.add("cat_entropy", _norm_entropy(cat_counts.values()))
+
+    # value payloads
+    pointer_kinds: Counter = Counter()
+    button_seen = button_nonzero = 0
+    vis_true = vis_false = 0
+    key_counts: Counter = Counter()
+    for ev in ctx.events:
+        val = ev.get("value")
+        if not isinstance(val, dict):
+            continue
+        for k in val:
+            key_counts[str(k).strip().lower()] += 1
+        pointer = val.get("pointer")
+        if pointer is not None:
+            pointer_kinds[str(pointer).strip().lower()] += 1
+        button = val.get("button")
+        if button is not None:
+            button_seen += 1
+            if (_num(button) or 0.0) != 0.0:
+                button_nonzero += 1
+        if "visible" in val:
+            flag = _visible_flag(val.get("visible"))
+            if flag is True:
+                vis_true += 1
+            elif flag is False:
+                vis_false += 1
+    n_ptr = max(sum(pointer_kinds.values()), 1)
+    out.add("pointer_mouse_share", pointer_kinds.get("mouse", 0) / n_ptr)
+    out.add("pointer_touch_share",
+            (pointer_kinds.get("touch", 0) + pointer_kinds.get("pen", 0)) / n_ptr)
+    out.add("button_present_share", button_seen / n_ev)
+    out.add("button_nonzero_share", button_nonzero / max(button_seen, 1))
+    out.add("visibility_pairs_per_min", min(vis_true, vis_false) / ctx.minutes)
+    out.add("visible_false_share", vis_false / max(vis_true + vis_false, 1))
+    out.add("off_vocab_value_key_share",
+            sum(c for k, c in key_counts.items() if k not in _V2_VALUE_KEYS)
+            / max(sum(key_counts.values()), 1))
+
+    # pointer_down -> click press durations (physical button hold).  Humans
+    # hold 60-200ms with spread; scripted clicks are ~0 or a constant.
+    click_off = [float(ctx.ev_off[i]) for i in range(ctx.n_events)
+                 if ctx.ev_type[i] == "click"]
+    down_off = [float(ctx.ev_off[i]) for i in range(ctx.n_events)
+                if ctx.ev_type[i] == "pointer_down"]
+    presses: list[float] = []
+    di = 0
+    for c in click_off:
+        while di < len(down_off) and down_off[di] <= c:
+            di += 1
+        if di > 0 and c - down_off[di - 1] <= 2000.0:
+            presses.append(c - down_off[di - 1])
+    pa = np.asarray(presses, dtype=float)
+    out.add("press_n_per_click", len(presses) / max(len(click_off), 1))
+    out.add("press_mean_log", math.log10(1.0 + float(pa.mean())) if pa.size else 0.0)
+    out.add("press_cv", _rel(float(pa.std()), float(pa.mean())) if pa.size >= 3 else 0.0)
+    out.add("press_q50_log",
+            math.log10(1.0 + float(np.median(pa))) if pa.size else 0.0)
+    out.add("press_grid10_share",
+            float(np.mean(np.rint(pa).astype(np.int64) % 10 == 0)) if pa.size >= 3 else 0.0)
+    out.add("press_sub10ms_share", float(np.mean(pa < 10.0)) if pa.size else 0.0)
+
+    # moves-per-click run lengths: consecutive pointer_move events directly
+    # preceding each click (aim length; scripted UIs jump straight to 0-2).
+    runs: list[float] = []
+    run = 0
+    for i in range(ctx.n_events):
+        et = ctx.ev_type[i]
+        if et == "pointer_move":
+            run += 1
+        elif et == "click":
+            runs.append(float(run))
+            run = 0
+        elif et == "pointer_down":
+            continue  # a press does not break the aiming run
+        else:
+            run = 0
+    ra = np.asarray(runs, dtype=float)
+    out.add("aim_run_mean", float(ra.mean()) if ra.size else 0.0)
+    out.add("aim_run_cv", _rel(float(ra.std()), float(ra.mean())) if ra.size >= 3 else 0.0)
+    out.add("aim_run_zero_share", float(np.mean(ra == 0.0)) if ra.size else 0.0)
+
+    # v2 action-level relative clock: session_offset_ms structure
+    offs = [
+        _num(a.get("session_offset_ms"))
+        for a in ctx.actions
+    ]
+    offs = [v for v in offs if v is not None and v >= 0.0]
+    oa = np.asarray(offs, dtype=float)
+    out.add("session_offset_present_share",
+            len(offs) / max(ctx.n_actions, 1))
+    out.add("session_offset_monotone_share",
+            float(np.mean(np.diff(oa) >= 0.0)) if oa.size >= 2 else 0.0)
+    out.add("session_offset_span_vs_duration",
+            _rel(float(oa.max() - oa.min()), ctx.duration_ms) if oa.size >= 2 else 0.0)
+    gaps = np.diff(oa) if oa.size >= 2 else np.zeros(0)
+    gaps = gaps[gaps >= 0]
+    out.add("session_offset_gap_cv",
+            _rel(float(gaps.std()), float(gaps.mean())) if gaps.size >= 3 else 0.0)
+    out.add("session_offset_gap_grid1000_share",
+            float(np.mean(np.rint(gaps).astype(np.int64) % 1000 == 0)) if gaps.size >= 3 else 0.0)
+    out.add("is_v2", 1.0 if ctx.is_v2 else 0.0)
+
+
+# ---------------------------------------------------------------------------
 # assembly
 # ---------------------------------------------------------------------------
 
@@ -1665,6 +1892,7 @@ GROUP_ORDER = (
     "g08_attention",
     "g09_sequence",
     "g10_drift",
+    "g11_v2vocab",
 )
 
 _GROUP_FUNCS = {
@@ -1678,6 +1906,7 @@ _GROUP_FUNCS = {
     "g08_attention": _g08_attention,
     "g09_sequence": _g09_sequence,
     "g10_drift": _g10_drift,
+    "g11_v2vocab": _g11_v2vocab,
 }
 
 FEATURE_GROUPS: dict[str, list[str]] = {}
